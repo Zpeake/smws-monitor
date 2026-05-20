@@ -21,35 +21,10 @@ from bs4 import BeautifulSoup
 # CONFIG
 # ─────────────────────────────────────────────
 
-OUTTURN_URL    = "https://smwsa.com/collections/whisky"
+from config import NTFY_CHANNEL, USERS, OUTTURN_URL, CHECK_INTERVAL
+
 KNOWN_FILE     = Path(__file__).parent / "known_handles.json"
 DB_FILE        = Path(__file__).parent / "smws_distilleries.db"
-CHECK_INTERVAL = (45, 75)   # randomized interval range in seconds
-
-# Ntfy — shared channel, all subscribers get every alert
-# Leave blank to skip
-NTFY_CHANNEL = ""           # e.g. "smws-monitor-zp7k"
-
-# Per-user settings — each user gets personalized Discord DMs
-USERS = [
-    {
-        "name": "Zac",
-        "discord_webhook": "",          # your private Discord channel webhook URL
-        "priority_regions": ["Islay"],
-        "priority_flavors": ["Bold & Peaty", "Heavily Peated", "Coastal & Maritime",
-                              "Oily & Coastal", "Lightly Peated", "Peated", "Smoky & Fruity"],
-        "exclude_distilleries": ["53"], # Caol Ila
-        "price_threshold": 175,
-    },
-    {
-        "name": "Friend",
-        "discord_webhook": "",          # his private Discord channel webhook URL
-        "priority_regions": [],         # TBD
-        "priority_flavors": [],         # TBD
-        "exclude_distilleries": [],
-        "price_threshold": 200,
-    },
-]
 
 HEADERS = {
     "User-Agent": (
