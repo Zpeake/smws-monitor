@@ -219,3 +219,6 @@ __marimo__/
 
 # Configs
 config.py
+
+# Claude Code
+CLAUDE.md
