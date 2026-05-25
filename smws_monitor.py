@@ -2,15 +2,14 @@
 """
 SMWS Release Monitor
 Watches the SMWS America outturn page and sends personalized Discord
-DMs + shared Ntfy push notification + Mac notification when new
-products appear, with distillery/region info from a local SQLite DB.
+DMs + shared Ntfy push notification when new products appear, with
+distillery/region info from a local SQLite DB.
 """
 
 import re
 import json
 import time
 import sqlite3
-import subprocess
 import random
 from pathlib import Path
 
@@ -23,8 +22,8 @@ from bs4 import BeautifulSoup
 
 from config import NTFY_CHANNEL, USERS, OUTTURN_URL, CHECK_INTERVAL
 
-KNOWN_FILE     = Path(__file__).parent / "known_handles.json"
-DB_FILE        = Path(__file__).parent / "smws_distilleries.db"
+KNOWN_FILE = Path(__file__).parent / "known_handles.json"
+DB_FILE    = Path(__file__).parent / "smws_distilleries.db"
 
 HEADERS = {
     "User-Agent": (
@@ -38,16 +37,6 @@ HEADERS = {
 # ─────────────────────────────────────────────
 # NOTIFICATIONS
 # ─────────────────────────────────────────────
-
-def notify_mac(title: str, message: str, sound: str = "Glass"):
-    """Send a native macOS notification with sound (local only)."""
-    script = (
-        f'display notification "{message}" '
-        f'with title "{title}" '
-        f'sound name "{sound}"'
-    )
-    subprocess.run(["osascript", "-e", script], check=False)
-
 
 def notify_ntfy(title: str, message: str, ntfy_priority: str = "default"):
     """Send a shared push notification via Ntfy."""
@@ -79,18 +68,17 @@ def notify_discord(webhook_url: str, title: str, message: str, color: int):
             "embeds": [{
                 "title": title,
                 "description": message,
-                "color": color,     # hex color as int: red=15158332, yellow=16776960, green=5763719
+                "color": color,
             }]
         }
         requests.post(webhook_url, json=payload, timeout=10)
-        print(f"  💬 Discord notification sent")
+        print("  💬 Discord notification sent")
     except Exception as e:
         print(f"  ⚠️  Discord failed: {e}")
 
 
 def send_system_alert(title: str, message: str, ntfy_priority: str = "high"):
     """Send a system-level alert (errors, blocks) via all channels."""
-    notify_mac(title, message, sound="Basso")
     notify_ntfy(title, message, ntfy_priority=ntfy_priority)
     for user in USERS:
         notify_discord(user["discord_webhook"], title, message, 15158332)
@@ -185,9 +173,9 @@ def fetch_product_details(handle: str) -> dict:
 # ─────────────────────────────────────────────
 
 PRIORITY_LEVELS = {
-    "🔴 HIGH PRIORITY":  {"ntfy": "urgent", "sound": "Glass",  "color": 15158332},
-    "🟡 WORTH A LOOK":   {"ntfy": "high",    "sound": "Ping",   "color": 16776960},
-    "🟢 FYI":            {"ntfy": "default", "sound": "Tink",   "color": 5763719},
+    "🔴 HIGH PRIORITY": {"ntfy": "urgent", "color": 15158332},
+    "🟡 WORTH A LOOK":  {"ntfy": "high",   "color": 16776960},
+    "🟢 FYI":           {"ntfy": "default", "color": 5763719},
 }
 
 
@@ -239,6 +227,7 @@ def get_current_handles(known_handles: set) -> set:
     """
     Fetch the outturn page and return a set of product handles.
     Includes error handling for blocks, rate limits, and empty results.
+    Retries once before firing a zero-handles alert.
     """
     resp = requests.get(OUTTURN_URL, headers=HEADERS, timeout=15)
 
@@ -257,12 +246,31 @@ def get_current_handles(known_handles: set) -> set:
     excluded = {"gift-card"}
     handles = handles - excluded
 
+    # Retry up to 3 times before alerting and shutting down
     if len(handles) == 0 and len(known_handles) > 0:
-        send_system_alert(
-            "⚠️ SMWS Monitor",
-            "Zero products found — URL or page structure may have changed!"
-        )
-        raise requests.RequestException("Zero handles — possible structure change")
+        for attempt in range(1, 4):
+            print(f"  ⚠️  Zero handles detected — retry {attempt}/3 in 10s...")
+            time.sleep(10)
+            resp = requests.get(OUTTURN_URL, headers=HEADERS, timeout=15)
+            handles = set(re.findall(r'href="/products/([a-z0-9-]+)"', resp.text)) - excluded
+            if len(handles) > 0:
+                print(f"  ✅ Recovered on retry {attempt}.")
+                break
+        else:
+            # All 3 retries failed — notify and shut down
+            shutdown_msg = (
+                "Zero products found after 3 consecutive attempts.\n"
+                "The URL or page structure may have changed.\n"
+                "Monitor has shut down — manual inspection required."
+            )
+            print(f"\n  ❌ {shutdown_msg}")
+            notify_discord(
+                USERS[0]["discord_webhook"],
+                "🚨 SMWS Monitor Shutdown",
+                shutdown_msg,
+                15158332
+            )
+            raise SystemExit("Shutting down after 3 failed retries.")
 
     return handles
 
@@ -359,9 +367,8 @@ def main():
                 ]))
 
                 # Send personalized Discord DM to each user
-                top_ntfy_priority = "default"
-                top_sound = "Tink"
                 priority_order = ["🔴 HIGH PRIORITY", "🟡 WORTH A LOOK", "🟢 FYI"]
+                top_ntfy_priority = "default"
 
                 for user in USERS:
                     priority = determine_priority_for_user(
@@ -377,18 +384,15 @@ def main():
                         p["color"]
                     )
 
-                    # Track highest priority for shared notifications
+                    # Track highest priority for shared Ntfy notification
                     if priority_order.index(priority) < priority_order.index(
                         "🟢 FYI" if top_ntfy_priority == "default"
                         else "🟡 WORTH A LOOK" if top_ntfy_priority == "high"
                         else "🔴 HIGH PRIORITY"
                     ):
                         top_ntfy_priority = p["ntfy"]
-                        top_sound = p["sound"]
 
-                # Shared notifications at highest priority
-                notify_mac(f"🥃 New SMWS Drop", notif_body, sound=top_sound)
-                notify_ntfy(f"🥃 New SMWS Drop", notif_body, ntfy_priority=top_ntfy_priority)
+                notify_ntfy("🥃 New SMWS Drop", notif_body, ntfy_priority=top_ntfy_priority)
                 print()
 
             known_handles = known_handles | new_handles
